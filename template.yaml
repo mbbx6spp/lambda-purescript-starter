@@ -1,0 +1,243 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: Hello PureScript HTTP API
+
+## Parameters
+
+Parameters:
+  Service:
+    Type: String
+    Description: Service of the deployment
+    Default: express
+    AllowedValues:
+      - express
+      - native
+      - typedriven
+      - dailykos
+    ConstraintDescription: Must be express
+  Component:
+    Type: String
+    Description: Component for the deployment
+    Default: hello
+    AllowedValues:
+      - hello
+    ConstraintDescription: Must be hello
+  Stage:
+    Type: String
+    Description: Stage for the deployment
+    Default: staging
+    AllowedValues:
+      - staging
+      - prod
+  Version:
+    Type: String
+    Default: v1.0
+    Description: Version to tag as deployment identifier
+  SubnetIds:
+    Type: AWS::SSM::Parameter::Value<List<String>>
+    Description: Subnet IDs to deploy Lambda
+    Default: /staging/main/subnets/public
+  VpcId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Description: VPC ID for given Stage and AWS::Region
+    Default: /staging/us-east-2/main/vpc/id
+  CertificateArn:
+    Type: String
+    Description: Certificate ARN for custom domain
+  HostedZoneName:
+    Type: String
+    Description: Host zone name for DNS of custom domain
+  Subdomain:
+    Type: String
+    Description: Subdomain for domain base path mapping
+    Default: test
+  OnFailureSNSArn:
+    Type: String
+    Description: SNS ARN for on-failure handling
+
+## Mappings
+
+
+
+## Globals
+
+Globals:
+  Function:
+    Timeout: 2
+    Runtime: nodejs12.x
+    MemorySize: 128
+
+## Resources
+
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP traffic for ingress and egress
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+
+  AccessLogs:
+    Type: AWS::Logs::LogGroup
+    DependsOn: AccountConfig
+    Properties:
+      LogGroupName: !Join
+        - '-'
+        - - !Ref Stage
+          - !Ref Service
+          - !Ref Component
+
+  AccountConfig:
+    Type: AWS::ApiGateway::Account
+    DependsOn: LoggingRole
+    Properties:
+      CloudWatchRoleArn: !GetAtt LoggingRole.Arn
+
+  LoggingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "apigateway.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Path: "/"
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+
+  ApiGateway:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Stage
+      CorsConfiguration:
+        AllowOrigins: !Join
+          - ''
+          - - 'https://'
+            - 'www.'
+            - !Ref HostedZoneName
+        AllowHeaders:
+          - '*'
+        AllowMethods:
+          - GET
+          - POST
+        MaxAge: 300
+        AllowCredentials: False
+      Domain:
+        DomainName: !Join [ '.', [!Ref Subdomain, !Ref HostedZoneName]]
+        CertificateArn: !Ref CertificateArn
+        EndpointConfiguration: REGIONAL
+        Route53:
+          HostedZoneName: !Join ['', [!Ref HostedZoneName, '.']]
+        BasePath: ''
+      #DefaultRouteSettings:
+      #  DataTraceEnabled: false
+      #  DetailedMetricsEnabled: true
+      #  LoggingLevel: INFO
+      #  ThrottlingBurstLimit: 100
+      AccessLogSettings:
+        DestinationArn: !GetAtt AccessLogs.Arn
+        Format: >-
+          { "requestId":"$context.requestId"
+          , "ip": "$context.identity.sourceIp"
+          , "requestTime":"$context.requestTime"
+          , "routeKey":"$context.routeKey"
+          , "status":"$context.status" }
+      Tags:
+        Stage: !Ref Stage
+        Service: !Ref Service
+        Component: !Ref Component
+
+  Lambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: lambda.handler
+      CodeUri: ./
+      Policies:
+        - AWSLambdaFullAccess
+        - CloudWatchLogsFullAccess
+        - AmazonAPIGatewayInvokeFullAccess
+        - AWSLambdaVPCAccessExecutionRole
+      #Tracing: Active
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref SecurityGroup
+        SubnetIds: !Ref SubnetIds
+      Environment:
+        Variables:
+          STAGE: !Ref Stage
+          SERVICE: !Ref Service
+          COMPONENT: !Ref Component
+          DOMAIN: !Ref HostedZoneName
+      Events:
+        GETTimeApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiGateway
+            Path: /time
+            Method: GET
+        POSTGreetingApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiGateway
+            Path: /greeting
+            Method: POST
+      EventInvokeConfig:
+        MaximumRetryAttempts: 1
+        DestinationConfig:
+          #OnSuccess:
+          #  Type: [SQS | SNS | EventBridge | Function]
+          #  Destination: ARN of [SQS | SNS | EventBridge | Function]
+          OnFailure:
+            Type: SNS
+            Destination: !Ref OnFailureSNSArn
+      Tags:
+        Stage: !Ref Stage
+        Service: !Ref Service
+        Component: !Ref Component
+
+## Outputs
+
+Outputs:
+  ApiGatewayUrl:
+    Description: URL of API Gateway
+    Value:
+      Fn::Sub: 'https://${ApiGateway}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${Stage}/'
+
+  ApiGatewayArn:
+    Description: ARN for API Gateway
+    Value: !Ref ApiGateway
+
+  LambdaArn:
+    Description: ARN for Lambda
+    Value: !Ref Lambda
+
+  HostedZone:
+    Description: DNS name
+    Value: !Ref HostedZoneName
+
+  Subdomain:
+    Description: Subdomain
+    Value: !Ref Subdomain
+
+  StackId:
+    Description: Stack Id
+    Value: !Ref AWS::StackId
+
+  StackName:
+    Description: Stack name
+    Value: !Ref AWS::StackName
+
+  CertificateArn:
+    Value: !Ref CertificateArn

@@ -1,0 +1,37 @@
+{
+  "name": "reflabs-purescript-lambda-starter",
+  "version": "0.1.0",
+  "description": "A starter projects for building and deploying AWS Lambdas in PureScript by Referential Labs",
+  "scripts": {
+    "prepare": "spago build && mkdir -p dist && cp package.json yarn.lock template.yaml dist/",
+    "build": "spago build",
+    "@build": "find src/ -name '*.purs' -o -name '*.js' | entr -s 'spago build'",
+    "pretest": "spago build",
+    "test": "spago -x test.dhall test",
+    "@test": "find src/ test/ -name '*.purs' -o -name '*.js' | entr -s 'spago -x test.dhall test'",
+    "prebundle": "mkdir -p dist && spago bundle-module -m Hello.PureScript -t dist/lambda.js",
+    "bundle": "cd dist/ && yarn install --prod; cd ..",
+    "predeploy": "yarn prepare && yarn bundle && sam build -t dist/template.yaml && sam package --debug -t dist/template.yaml --output-template-file dist/template.yaml.lock --s3-bucket $BUCKET",
+    "deploy": "sam deploy -t dist/template.yaml.lock --stack-name hello-purescript --s3-bucket $BUCKET --capabilities CAPABILITY_IAM --parameter-overrides SubnetIds=/$STAGE/$SERVICE/subnets/public CertificateArn=$CERTARN HostedZoneName=$HOSTEDZONE VpcId=/$STAGE/$REGION/$SERVICE/vpc/id Subdomain=$SUBDOMAIN Service=$SERVICE Stage=$STAGE OnFailureSNSArn=$ONFAILURESNSARN --region $REGION",
+    "start": "npm run bundle && sam local start-api -t dist/template.yaml",
+    "invoke": "sam local invoke Lambda -t dist/template.yaml",
+    "logs:lambda": "sam logs --stack-name hello-purescript -n Lambda -t --region $REGION",
+    "logs:gateway": "sam logs --stack-name hello-purescript -n ApiGateway -t --region $REGION",
+    "package": "sam build -t dist/template.yaml",
+    "undeploy": "aws cloudformation delete-stack --stack-name hello-purescript --region $REGION"
+  },
+  "dependencies": {
+    "aws-serverless-express": "^3.3.8",
+    "express": "^4.17.1",
+    "helmet": "^3.23.1"
+  },
+  "devDependencies": {
+    "aws-sdk": "2.631.0"
+  },
+  "license": "MIT",
+  "keywords": [
+    "node",
+    "aws",
+    "purescript"
+  ]
+}

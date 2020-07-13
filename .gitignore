@@ -1,0 +1,6 @@
+.spago
+output/
+node_modules
+dist/
+.env
+.aws-sam/
