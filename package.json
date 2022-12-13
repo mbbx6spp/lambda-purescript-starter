@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "aws-serverless-express": "^3.3.8",
-    "express": "^4.17.1",
+    "express": "^4.17.3",
     "helmet": "^3.23.1"
   },
   "devDependencies": {
